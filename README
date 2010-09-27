@@ -1,0 +1,25 @@
+== What's this? ==
+
+Simple command line PostgreSQL Monitor to display
+the status of SR/HS PostgreSQL nodes. To gain more in-detail
+description of this tool, simply call
+
+   $ perldoc pg_standby_status
+
+== Prerequisites ==
+
+pg_standby_status.pl requires a Perl environment and a working
+DBI-Installation. Since it monitors PostgreSQL servers directly
+by querying all nodes, it requires the DBD:Pg drivers to be installed.
+It also requires the Perl Curses modules to be installed.
+
+== Usage ==
+
+From any terminal, simply type 
+
+   $ pg_standby_status MASTER_DSN [ STANDBY_DSN1, ... ]
+
+where MASTER_DSN is the DBI connection string to the master, and
+STANDBY_DSNn the DBI connection string to any slave, e.g.
+
+   $ pg_standby_status "host=master dbname=mydb" "host=slave dbname=mydb"
