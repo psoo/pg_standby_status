@@ -21,7 +21,7 @@ though.
 pg_standby status currently prints the status of the primary node on the first line
 of the status monitor output:
 
-    M= 192.168.1.6:5432 1C/927BC3D0 keep 160
+    M= 192.168.1.6:5445 3E/5B05DE30 keep 64
 
 The M= indicates the position of the primary node, followed by its IP and port
 number. The XX/XXXXXXXX formatted string displays the current segment id and
@@ -38,8 +38,9 @@ the absolute position of the transaction log (XX/XX) on the master and the stand
 it can be compared manually. The first value is the XLOG segment id, the second the 
 XLOG segment number of the current XLOG segment id.
 
-    S= 192.168.1.6:5446 1B/FDFFFFF0 replay(segid=1/count=33) recv(segid=1/count=33) STREAMING possible
-       >>M=S=(1C/32 1B/253)
+    S=    192.168.1.6:5446 3E/5B05DE30 replay(segid=0/count=0) recv(segid=0/count=0)
+       STREAMING possible
+       -M>>S=(3E/91 3E/91) 0 MB
 
 The status monitor displays a status string next to each S= line, telling the
 user wether it is possible for the standby server to stream from the primary's
@@ -77,9 +78,6 @@ my @dsn_slaves = ();
 ##
 ## Retrieve the current xlog position on the primary. Returns
 ## a hash reference with all informations
-##
-## Use XLOGFilename() to get the actual XLOG filename (adapted from
-## include/access/xlog_internal.h)
 ##
 sub XLOGLocationPrimary(%) {
     my %args = @_;
@@ -168,6 +166,7 @@ sub XLOGDistance($$) {
     $distance{SLAVE_XLOGSEGID}  = $standby_xlogid;
     $distance{MASTER_XLOGCOUNT} = $master_log;
     $distance{SLAVE_XLOGCOUNT}  = $standby_log;
+    $distance{SLAVE_XLOG_BACKLOG_SZ} = $distance{XLOGCOUNT} * $master_location->{XLOGSEGSIZE};
 
     return %distance;
 }
@@ -285,14 +284,15 @@ while(1) {
         %distance_recv = XLOGDistance(\%master_location, $location->{XLOGRECVLOCATION});
 
         ## Materialize output
-        $standby_locstr = sprintf "   %s:%s %s replay(segid=%d/count=%d) recv(segid=%d/count=%d)", 
+        $standby_locstr = sprintf "   %s:%s %s replay(segid=%d/count=%d) recv(segid=%d/count=%d)\n", 
                                   $location->{PGHOST}, $location->{PGPORT},
                                   $location->{XLOGLOCATION}, $distance{XLOGSEGID}, 
                                   $distance{XLOGCOUNT}, $distance_recv{XLOGSEGID},
                                   $distance_recv{XLOGCOUNT};
-        $extra_locstr = sprintf "   >>M=S=(%X/%d %X/%d)\n", $distance{MASTER_XLOGSEGID}, 
+        $extra_locstr = sprintf "   -M>>S=(%X/%d %X/%d) %u MB\n", $distance{MASTER_XLOGSEGID}, 
                                 $distance{MASTER_XLOGCOUNT}, $distance{SLAVE_XLOGSEGID}, 
-                                $distance{SLAVE_XLOGCOUNT};
+                                $distance{SLAVE_XLOGCOUNT}, 
+                                $distance{SLAVE_XLOG_BACKLOG_SZ} / 1024 / 1024;
 
         ## check wether the current lag will likely exceed the available
         ## XLOG segments located on the primary. Give a warning when
@@ -308,12 +308,12 @@ while(1) {
         if ($master_location{WAL_KEEP_SEGMENTS} > $distance{XLOGCOUNT}) {
             printw(sprintf "S= %s ", $standby_locstr);
             attron(COLOR_PAIR(1));
-            printw("STREAMING possible\n");
+            printw("  STREAMING possible\n");
             attroff(COLOR_PAIR(1));
         } else {
             printw(sprintf "S= %s ", $standby_locstr);
             attron(COLOR_PAIR(2));
-            printw("RECOVER FROM ARCHIVE required\n");
+            printw("  RECOVER FROM ARCHIVE required\n");
             attroff(COLOR_PAIR(2));
         }
 
