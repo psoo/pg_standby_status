@@ -147,9 +147,9 @@ sub XLOGDistance($$) {
     ## calculate the number of the current segment of the current XLOGSEGID. This is relativ to
     ## the starting segment of the current XLOGSEGID.
 
-    my $master_log = 1 + hex("FF") - ((hex("FFFFFFFF") 
+    my $master_log = 1 + hex("FF") - ((hex("FF000000") 
                                        - (hex($master_xlogoffset))) / $master_location->{XLOGSEGSIZE});
-    my $standby_log = 1 + hex("FF") - ((hex("FFFFFFFF") 
+    my $standby_log = 1 + hex("FF") - ((hex("FF000000") 
                                         - (hex($standby_xlogoffset))) / $master_location->{XLOGSEGSIZE});
     my %distance = {};
     $distance{XLOGSEGID} = hex("$master_xlogid") - hex("$standby_xlogid");
