@@ -17,9 +17,12 @@ It also requires the Perl Curses modules to be installed.
 
 From any terminal, simply type 
 
-   $ pg_standby_status MASTER_DSN [ STANDBY_DSN1, ... ]
+   $ pg_standby_status --primary MASTER_DSN [ --slave STANDBY_DSN1, ... ]
 
 where MASTER_DSN is the DBI connection string to the master, and
 STANDBY_DSNn the DBI connection string to any slave, e.g.
 
-   $ pg_standby_status "host=master dbname=mydb" "host=slave dbname=mydb"
+   $ pg_standby_status --primary="host=master dbname=mydb"\
+         --slave "host=slave dbname=mydb"
+
+Multiple --slave parameters can be specified for multiple standby nodes.
