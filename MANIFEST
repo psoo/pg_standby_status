@@ -1,0 +1,5 @@
+bin/pg_standby_status
+README
+LICENSE
+MANIFEST
+Makefile.PL

@@ -96,6 +96,8 @@ use Pod::Usage;
 
 my $bTerm = 0;
 
+$VERSION = "0.2";
+
 ##
 ## Handle exit
 ##
