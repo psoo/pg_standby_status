@@ -93,10 +93,9 @@ use DBI;
 use Curses;
 use Getopt::Long;
 use Pod::Usage;
+use version; our $VERSION = qv(0.2);
 
 my $bTerm = 0;
-
-$VERSION = "0.2";
 
 ##
 ## Handle exit
