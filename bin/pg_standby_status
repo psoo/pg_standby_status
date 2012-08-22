@@ -414,7 +414,7 @@ while(1) {
                                 $distance{SLAVE_XLOGCOUNT},
                                 $distance{SLAVE_XLOG_BACKLOG_SZ} / 1024 / 1024;
 
-        ## check wether the current lag will likely exceed the available
+        ## check wether the current receive lag will likely exceed the available
         ## XLOG segments located on the primary. Give a warning when
         ## we exceed wal_keep_segments.
         ##
@@ -425,7 +425,7 @@ while(1) {
         ## segments from archive until it has absorbed all available segments and can
         ## safely return to streaming mode.
 
-        if ($master_location{WAL_KEEP_SEGMENTS} > $distance{XLOGCOUNT}) {
+        if ($master_location{WAL_KEEP_SEGMENTS} > $distance_recv{XLOGCOUNT}) {
             printw(sprintf "S= %s ", $standby_locstr);
             attron(COLOR_PAIR(1));
             printw("  STREAMING possible\n");
