@@ -24,6 +24,10 @@ Report the lag for replayed transaction logs (Streaming Replication only) in
 megabytes. This option supports non-interactive mode only and pg_standby_mode
 will exit immediately after printing the results.
 
+=item B<--refresh=secs>
+
+Refresh the interactive status monitor after this time.
+
 =back
 
 =head1 DESCRIPTION
@@ -62,11 +66,14 @@ received from the master during streaming replication are displayed by the recv(
 Next to each S= line there is a  summary line, indicated by a '>>' string. It displays
 the absolute position of the transaction log (XX/XX) on the master and the standby so
 it can be compared manually. The first value is the XLOG segment id, the second the
-XLOG segment number of the current XLOG segment id.
+XLOG segment number of the current XLOG segment id. Additionally, the replication lag
+for replayed transactions are displayed, in MByte, telling how behind of XLOG volume
+the standby is, and a time value, telling how far behind in time the last replayed
+XLOG record is.
 
     S=    192.168.1.6:5446 3E/5B05DE30 replay(segid=0/count=0) recv(segid=0/count=0)
        STREAMING possible
-       -M>>S=(3E/91 3E/91) 0 MB
+       -M>>S=(3E/91 3E/91) 0 MB, time 00:00:01.087401
 
 The status monitor displays a status string next to each S= line, telling the
 user wether it is possible for the standby server to stream from the primary's
@@ -206,6 +213,9 @@ sub XLOGDistance($$) {
 ## Returns a hash with the following keys/values:
 ## XLOGLOCATION    : Last location replayed by the standby
 ## XLOGRECVLOCATION: Last location received by streaming
+## XLOGTIMELAG     : The time lag of replayed transactions records
+##                   Calculates the distance between the last replayed
+##                   XLOG timestamp and current.
 ## STANDBYENABLED  : The standby is in recovery mode (true)
 ##                   or was normally started (false).
 ##                   If the latter is the case, this standby is not
@@ -223,7 +233,8 @@ sub XLOGLocationStandby(%) {
 
     my $sth = $db->prepare(qq/SELECT pg_is_in_recovery() AS standby_enabled,
                                      pg_last_xlog_receive_location() AS receive,
-                                     pg_last_xlog_replay_location() AS location;/)
+                                     pg_last_xlog_replay_location() AS location,
+                                     localtimestamp - pg_last_xact_replay_timestamp()::timestamp without time zone AS time;/)
         || die "error executing pg_last_xlog_replay_location on standby\n";
     my %standby_info = {};
     $sth->execute();
@@ -232,6 +243,7 @@ sub XLOGLocationStandby(%) {
         $standby_info{STANDBYENABLED}   = $hashref->{standby_enabled};
         $standby_info{XLOGLOCATION}     = $hashref->{location};
         $standby_info{XLOGRECVLOCATION} = $hashref->{receive};
+	$standby_info{XLOGTIMELAG}      = $hashref->{time};
     }
 
     $standby_info{PGHOST} = $db->{pg_host};
@@ -339,6 +351,12 @@ if ($report_action) {
 	    $location->{PGHOST}, $location->{PGPORT},
 	    $distance_recv{SLAVE_XLOG_BACKLOG_SZ} / 1024 / 1024;
 
+	} elsif ($report_action eq "lag-replayed-time") {
+
+	    printf "%s:%s %s:%s %s\n", $master_location{PGHOST}, $master_location{PGPORT},
+	    $location->{PGHOST}, $location->{PGPORT},
+	    $location->{XLOGTIMELAG};
+
 	} else {
 
 	    print STDERR "unsupported action for --report: \"$report_action\"";
@@ -409,10 +427,11 @@ while(1) {
                                   $location->{XLOGLOCATION}, $distance{XLOGSEGID},
                                   $distance{XLOGCOUNT}, $distance_recv{XLOGSEGID},
                                   $distance_recv{XLOGCOUNT};
-        $extra_locstr = sprintf "   -M>>S=(%X/%d %X/%d) %u MB\n", $distance{MASTER_XLOGSEGID},
+        $extra_locstr = sprintf "   -M>>S=(%X/%d %X/%d) lag %u MB, time %s\n", $distance{MASTER_XLOGSEGID},
                                 $distance{MASTER_XLOGCOUNT}, $distance{SLAVE_XLOGSEGID},
                                 $distance{SLAVE_XLOGCOUNT},
-                                $distance{SLAVE_XLOG_BACKLOG_SZ} / 1024 / 1024;
+                                $distance{SLAVE_XLOG_BACKLOG_SZ} / 1024 / 1024,
+                                $location->{XLOGTIMELAG};
 
         ## check wether the current receive lag will likely exceed the available
         ## XLOG segments located on the primary. Give a warning when
