@@ -1,4 +1,4 @@
-Informix Foreign Data Wrapper for PostgreSQL
+pg_standby_status, Status Monitor for PostgreSQL Hot Standby Streaming Servers
 Copyright (c) 2012, credativ GmbH
 
 Permission to use, copy, modify, and distribute this software and its
