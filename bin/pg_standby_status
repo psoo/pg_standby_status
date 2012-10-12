@@ -261,7 +261,7 @@ sub XLOGLocationStandby(%) {
         $standby_info{STANDBYENABLED}   = $hashref->{standby_enabled};
         $standby_info{XLOGLOCATION}     = $hashref->{location};
         $standby_info{XLOGRECVLOCATION} = $hashref->{receive};
-	$standby_info{XLOGTIMELAG}      = $hashref->{time} || "not supported";
+	$standby_info{XLOGTIMELAG}      = $hashref->{time} || "not available";
     }
 
     $standby_info{PGHOST} = $db->{pg_host};
