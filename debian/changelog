@@ -1,3 +1,11 @@
+pg-standby-status (0v0.3-1) unstable; urgency=low
+
+  * Deliver the promise that the tool still supports PG 9.0.
+    pg_last_xact_replay_timestamp() is not supported in 9.0, so
+    treat it optional.
+
+ -- Bernd Helmle <bernd.helmle@credativ.de>  Fri, 12 Oct 2012 14:13:46 +0200
+
 pg-standby-status (0v0.2-1) unstable; urgency=low
 
   * Initial Release.
