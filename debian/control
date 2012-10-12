@@ -1,0 +1,20 @@
+Source: pg-standby-status
+Section: perl
+Priority: optional
+Build-Depends: debhelper (>= 7)
+Build-Depends-Indep: perl
+Maintainer: Bernd Helmle <bernd.helmle@credativ.de>
+Standards-Version: 3.9.1
+Homepage: http://search.cpan.org/dist/pg_standby_status/
+
+Package: pg-standby-status
+Architecture: all
+Depends: ${misc:Depends}, ${perl:Depends}, libcurses-perl, libdbd-pg-perl
+Description: Status Monitor for PostgreSQL Hot Standby Servers
+ pg_standby_status is a status monitor which is able to display the lag of
+ transaction logs and offsets of PostgreSQL standby servers, which are running
+ with hot_standby = on. Thus this program requires at least PostgreSQL 9.0. It
+ doesn't matter wether you are running a streaming replication setup or a
+ WAL-shipping solution, though.
+
+
