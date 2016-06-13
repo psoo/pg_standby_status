@@ -100,7 +100,7 @@ use DBI;
 use Curses;
 use Getopt::Long;
 use Pod::Usage;
-use version; our $VERSION = qv(0.3);
+use version; our $VERSION = q(0.3);
 
 my $bTerm = 0;
 
