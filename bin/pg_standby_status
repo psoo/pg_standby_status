@@ -59,17 +59,17 @@ offset in the transaction log. The "keep" keyword tells how many wal_keep_segmen
 are currently configured on the primary node. Next to the primary node status line, each
 standby is printed per line, introduced by the S= flag. Until the XX/XXXXXXXX string,
 the status line matches the one for the primary node. After this, the replay keyword
-dispays the distance of the XLOG segment id from the standby to the primary node (segid)
-and its number of XLOG segments it is behind (count) replaying. The XLOG records actually
+dispays the distance of the WAL segment id from the standby to the primary node (segid)
+and its number of WAL segments it is behind (count) replaying. The WAL records actually
 received from the master during streaming replication are displayed by the recv() values.
 
 Next to each S= line there is a  summary line, indicated by a '>>' string. It displays
 the absolute position of the transaction log (XX/XX) on the master and the standby so
-it can be compared manually. The first value is the XLOG segment id, the second the
-XLOG segment number of the current XLOG segment id. Additionally, the replication lag
-for replayed transactions are displayed, in MByte, telling how behind of XLOG volume
+it can be compared manually. The first value is the WAL segment id, the second the
+WAL segment number of the current WAL segment id. Additionally, the replication lag
+for replayed transactions are displayed, in MByte, telling how behind of WAL volume
 the standby is, and a time value, telling how far behind in time the last replayed
-XLOG record is.
+WAL record is.
 
     S=    192.168.1.6:5446 3E/5B05DE30 replay(segid=0/count=0) recv(segid=0/count=0)
        STREAMING possible
@@ -84,7 +84,7 @@ threshold of wal_keep_segments of the primary,
 it will change back to "STREAMING possible". However, this doesn't indicate that
 the specific standby will return to streaming mode immediately. It just means that
 the PostgreSQL server likely will switch back to streaming mode soon, once it has
-absorbed all required XLOG segments from the archive.
+absorbed all required WAL segments from the archive.
 
 =head1 RETURN CODES
 
@@ -100,7 +100,7 @@ use DBI;
 use Curses;
 use Getopt::Long;
 use Pod::Usage;
-use version; our $VERSION = q(0.3);
+use version; our $VERSION = q(0.4);
 
 my $bTerm = 0;
 
@@ -112,10 +112,10 @@ sub exit_sig() {
 }
 
 ##
-## Retrieve the current xlog position on the primary. Returns
+## Retrieve the current WAL position on the primary. Returns
 ## a hash reference with all informations
 ##
-sub XLOGLocationPrimary(%) {
+sub WALLocationPrimary(%) {
     my %args = @_;
 
     my $db = $args{DBH};
@@ -123,16 +123,16 @@ sub XLOGLocationPrimary(%) {
     ## It is sufficient to obtain the major version number of
     ## the connected database server from the primary only. We are
     ## required to run the streaming standby with the same major
-    ## number, so no need to do it in XLOGLocationStandby() again.
-    my $sth = $db->prepare(qq/SELECT pg_current_xlog_location() AS location,
+    ## number, so no need to do it in WALLocationStandby() again.
+    my $sth = $db->prepare(qq/SELECT pg_current_wal_lsn() AS location,
                                      (SELECT a.setting::int4 * b.setting::int4
                                       FROM pg_settings a, pg_settings b
                                       WHERE a.name = 'wal_segment_size'
-                                            AND b.name = 'wal_block_size') AS xlogsegsize,
-                              current_setting('block_size') AS xlogblocksize,
+                                            AND b.name = 'wal_block_size') AS walsegsize,
+                              current_setting('block_size') AS walblocksize,
                               current_setting('wal_keep_segments') AS wal_keep_segments,
                               current_setting('server_version_num') AS pg_version_primary;/)
-        || die "error executing pg_current_xlog_location on master\n";
+        || die "error executing pg_current_wal_lsn on master\n";
     my %location = {};
     $sth->execute();
 
@@ -141,14 +141,14 @@ sub XLOGLocationPrimary(%) {
     $location{PGPORT} = $db->{pg_port};
 
     ## We catch some more informations on the primary, since we
-    ## need some of the compile time settings to calculate the XLOG offsets.
+    ## need some of the compile time settings to calculate the WAL offsets.
     ## Note that we easily can rely on those settings on the standby, too,
     ## since we must be binary compatible there.
 
     if (my $hashref = $sth->fetchrow_hashref()) {
-        $location{XLOGLOCATION} = $hashref->{location};
-        $location{XLOGSEGSIZE}  = $hashref->{xlogsegsize};
-        $location{XLOGBLKSIZE}  = $hashref->{xlogblocksize};
+        $location{WALLOCATION} = $hashref->{location};
+        $location{WALSEGSIZE}  = $hashref->{walsegsize};
+        $location{WALBLKSIZE}  = $hashref->{walblocksize};
         $location{WAL_KEEP_SEGMENTS} = $hashref->{wal_keep_segments};
 	$location{PG_VERSION_PRIMARY} = $hashref->{pg_version_primary};
     }
@@ -157,72 +157,72 @@ sub XLOGLocationPrimary(%) {
     return %location;
 }
 
-## Calculates the distance between two xlog locations
+## Calculates the distance between two WAL locations
 ##
 ## This does the guts of this holy tool. We get the
-## current XLOGSEGID/XLOGOFFSET via XLOGLocationPrimary() and
-## XLOGLocationStandby() and calculate the following values,
+## current WALSEGID/WALOFFSET via WALLocationPrimary() and
+## WALLocationStandby() and calculate the following values,
 ## returned by a hash reference (and its equally named key):
 ##
-## XLOGSEGID = Distance between the SEGID from standby to primary
-## XLOGCOUNT = Distance between current XLOG segment on primary
-##             and standby
-## MASTER_XLOGSEGID = current XLOGSEGID on the primary
-## SLAVE_XLOGSEGID  = current XLOGSEGID on the standby
-## MASTER_XLOGCOUNT = current XLOG segment on the primary
-## SLAVE_XLOGCOUNT  = current XLOG segment on the standby
+## WALSEGID = Distance between the SEGID from standby to primary
+## WALCOUNT = Distance between current WAL segment on primary
+##            and standby
+## MASTER_WALSEGID = current WALSEGID on the primary
+## SLAVE_WALSEGID  = current WALSEGID on the standby
+## MASTER_WALCOUNT = current WAL segment on the primary
+## SLAVE_WALCOUNT  = current WAL segment on the standby
 ##
 ## The time we calculate the values might be outdated: the standby and the
-## primary might already advanced their XLOG offsets, so the value
+## primary might already advanced their WAL offsets, so the value
 ## will likely appear a little "off".
 ##
-sub XLOGDistance($$) {
+sub WALDistance($$) {
 
     ## NOTE: master_location is passed as a hash reference
     my ($master_location, $standby_location) = @_;
-    my ($master_xlogid, $master_xlogoffset) = split '/', $master_location->{XLOGLOCATION};
-    my ($standby_xlogid, $standby_xlogoffset) = split '/', $standby_location;
+    my ($master_walid, $master_waloffset) = split '/', $master_location->{WALLOCATION};
+    my ($standby_walid, $standby_waloffset) = split '/', $standby_location;
 
-    ## convert hex values of xlogsegid
-    $master_xlogid = hex("$master_xlogid");
-    $standby_xlogid = hex("$standby_xlogid");
+    ## convert hex values of walsegid
+    $master_walid = hex("$master_walid");
+    $standby_walid = hex("$standby_walid");
 
-    ## calculate the number of the current segment of the current XLOGSEGID. This is relativ to
-    ## the starting segment of the current XLOGSEGID.
+    ## calculate the number of the current segment of the current WALSEGID. This is relativ to
+    ## the starting segment of the current WALSEGID.
 
     my $master_log = 1 + hex("FF") - ((hex("FF000000")
-                                       - (hex($master_xlogoffset))) / $master_location->{XLOGSEGSIZE});
+                                       - (hex($master_waloffset))) / $master_location->{WALSEGSIZE});
     my $standby_log = 1 + hex("FF") - ((hex("FF000000")
-                                        - (hex($standby_xlogoffset))) / $master_location->{XLOGSEGSIZE});
+                                        - (hex($standby_waloffset))) / $master_location->{WALSEGSIZE});
     my %distance = {};
-    $distance{XLOGSEGID} = hex("$master_xlogid") - hex("$standby_xlogid");
+    $distance{WALSEGID} = hex("$master_walid") - hex("$standby_walid");
 
-    ## Calculate the current distance of number of XLOG segments between
+    ## Calculate the current distance of number of WAL segments between
     ## the primary and the standby.
 
-    $distance{XLOGCOUNT} = ($master_xlogid * hex("FF") + $master_log)
-        - ($standby_xlogid * hex("FF") + $standby_log);
+    $distance{WALCOUNT} = ($master_walid * hex("FF") + $master_log)
+        - ($standby_walid * hex("FF") + $standby_log);
 
     ## record remaining values
 
-    $distance{MASTER_XLOGSEGID} = $master_xlogid;
-    $distance{SLAVE_XLOGSEGID}  = $standby_xlogid;
-    $distance{MASTER_XLOGCOUNT} = $master_log;
-    $distance{SLAVE_XLOGCOUNT}  = $standby_log;
-    $distance{SLAVE_XLOG_BACKLOG_SZ} = $distance{XLOGCOUNT} * $master_location->{XLOGSEGSIZE};
+    $distance{MASTER_WALSEGID} = $master_walid;
+    $distance{SLAVE_WALSEGID}  = $standby_walid;
+    $distance{MASTER_WALCOUNT} = $master_log;
+    $distance{SLAVE_WALCOUNT}  = $standby_log;
+    $distance{SLAVE_WAL_BACKLOG_SZ} = $distance{WALCOUNT} * $master_location->{WALSEGSIZE};
 
     return %distance;
 }
 
 ##
-## Retrieve the last replayed XLOG location from the primary
+## Retrieve the last replayed WAL location from the primary
 ##
 ## Returns a hash with the following keys/values:
-## XLOGLOCATION    : Last location replayed by the standby
-## XLOGRECVLOCATION: Last location received by streaming
-## XLOGTIMELAG     : The time lag of replayed transactions records
+## WALLOCATION    :  Last location replayed by the standby
+## WALRECVLOCATION:  Last location received by streaming
+## WALTIMELAG     :  The time lag of replayed transactions records
 ##                   Calculates the distance between the last replayed
-##                   XLOG timestamp and current.
+##                   WAL timestamp and current.
 ## STANDBYENABLED  : The standby is in recovery mode (true)
 ##                   or was normally started (false).
 ##                   If the latter is the case, this standby is not
@@ -231,10 +231,10 @@ sub XLOGDistance($$) {
 ##         standby this information comes)
 ## PGPORT: port of the standby
 ##
-## XLOGRECVLOCATION might not yet be initialized when streaming
+## WALRECVLOCATION might not yet be initialized when streaming
 ## wasn't enabled or wasn't started yet on the specified standby.
 ##
-sub XLOGLocationStandby(%) {
+sub WALLocationStandby(%) {
     my %args  = @_;
     my $db    = $args{DBH};
     my $pgver = $args{PG_VERSION_PRIMARY};
@@ -242,26 +242,26 @@ sub XLOGLocationStandby(%) {
 
     if ($pgver >= 90100) {
 	$sth = $db->prepare(qq/SELECT pg_is_in_recovery() AS standby_enabled,
-                                      pg_last_xlog_receive_location() AS receive,
-                                      pg_last_xlog_replay_location() AS location,
+                                      pg_last_wal_receive_lsn() AS receive,
+                                      pg_last_wal_replay_lsn() AS location,
                                       localtimestamp - pg_last_xact_replay_timestamp()::timestamp without time zone AS time;/)
-        || die "error executing pg_last_xlog_replay_location on standby\n";
+        || die "error executing pg_last_wal_replay_lsn on standby\n";
     }
     else {
 	$sth = $db->prepare(qq/SELECT pg_is_in_recovery() AS standby_enabled,
-                                      pg_last_xlog_receive_location() AS receive,
-                                      pg_last_xlog_replay_location() AS location,
+                                      pg_last_wal_receive_lsn() AS receive,
+                                      pg_last_wal_replay_lsn() AS location,
                                       NULL::timestamp without time zone AS time;/)
-        || die "error retrieving xlog receive/replay location on standby\n";
+        || die "error retrieving WAL receive/replay location on standby\n";
     }
     my %standby_info = {};
     $sth->execute();
 
     if (my $hashref = $sth->fetchrow_hashref()) {
         $standby_info{STANDBYENABLED}   = $hashref->{standby_enabled};
-        $standby_info{XLOGLOCATION}     = $hashref->{location};
-        $standby_info{XLOGRECVLOCATION} = $hashref->{receive};
-	$standby_info{XLOGTIMELAG}      = $hashref->{time} || "not available";
+        $standby_info{WALLOCATION}     = $hashref->{location};
+        $standby_info{WALRECVLOCATION} = $hashref->{receive};
+	$standby_info{WALTIMELAG}      = $hashref->{time} || "not available";
     }
 
     $standby_info{PGHOST} = $db->{pg_host};
@@ -272,18 +272,18 @@ sub XLOGLocationStandby(%) {
 }
 
 ##
-## Aggregates all standby XLOGLocationStandby() hash references
+## Aggregates all standby WALLocationStandby() hash references
 ## from all standby nodes.
 ##
-sub XLOGStandbyLocations(%) {
+sub WALStandbyLocations(%) {
     my %args = @_;
     my @standby = @{$args{DBHS}};
     my $pgversion = $args{PG_VERSION_PRIMARY};
     my @locations;
 
     for (my $i = 0; $i <= $#standby; $i++) {
-        $locations[$i] = XLOGLocationStandby(DBH => $standby[$i],
-					     PG_VERSION_PRIMARY => $pgversion);
+        $locations[$i] = WALLocationStandby(DBH => $standby[$i],
+                                            PG_VERSION_PRIMARY => $pgversion);
     }
 
     return @locations;
@@ -346,9 +346,9 @@ for(my $i = 0; $i <= $#dsn_slaves; $i++) {
 
 if ($report_action) {
 
-    my %master_location = XLOGLocationPrimary(DBH => $dbh_master);
-    my @standby_locations = XLOGStandbyLocations(DBHS => \@dbh_slaves,
-						 PG_VERSION_PRIMARY => $master_location{PG_VERSION_PRIMARY});
+    my %master_location = WALLocationPrimary(DBH => $dbh_master);
+    my @standby_locations = WALStandbyLocations(DBHS => \@dbh_slaves,
+                                                PG_VERSION_PRIMARY => $master_location{PG_VERSION_PRIMARY});
 
     foreach my $location (@standby_locations) {
 
@@ -356,27 +356,27 @@ if ($report_action) {
 	my %distance_recv;
 
 	## calculate distance from primary for each standby
-	%distance_replay = XLOGDistance(\%master_location, $location->{XLOGLOCATION});
-	%distance_recv   = XLOGDistance(\%master_location, $location->{XLOGRECVLOCATION});
+	%distance_replay = WALDistance(\%master_location, $location->{WALLOCATION});
+	%distance_recv   = WALDistance(\%master_location, $location->{WALRECVLOCATION});
 
 
 	if ($report_action eq "lag-replayed") {
 
 	    printf "%s:%s %s:%s %u\n", $master_location{PGHOST}, $master_location{PGPORT},
 	    $location->{PGHOST}, $location->{PGPORT},
-	    $distance_replay{SLAVE_XLOG_BACKLOG_SZ} / 1024 / 1024;
+	    $distance_replay{SLAVE_WAL_BACKLOG_SZ} / 1024 / 1024;
 
 	} elsif ($report_action eq "lag-received") {
 
 	    printf "%s:%s %s:%s %u\n", $master_location{PGHOST}, $master_location{PGPORT},
 	    $location->{PGHOST}, $location->{PGPORT},
-	    $distance_recv{SLAVE_XLOG_BACKLOG_SZ} / 1024 / 1024;
+	    $distance_recv{SLAVE_WAL_BACKLOG_SZ} / 1024 / 1024;
 
 	} elsif ($report_action eq "lag-replayed-time") {
 
 	    printf "%s:%s %s:%s %s\n", $master_location{PGHOST}, $master_location{PGPORT},
 	    $location->{PGHOST}, $location->{PGPORT},
-	    $location->{XLOGTIMELAG};
+	    $location->{WALTIMELAG};
 
 	} else {
 
@@ -404,9 +404,9 @@ init_pair(2, COLOR_RED, COLOR_BLACK);
 
 while(1) {
 
-    my %master_location = XLOGLocationPrimary(DBH => $dbh_master);
-    my @standby_locations = XLOGStandbyLocations(DBHS => \@dbh_slaves,
-						 PG_VERSION_PRIMARY => $master_location{PG_VERSION_PRIMARY});
+    my %master_location = WALLocationPrimary(DBH => $dbh_master);
+    my @standby_locations = WALStandbyLocations(DBHS => \@dbh_slaves,
+                                                PG_VERSION_PRIMARY => $master_location{PG_VERSION_PRIMARY});
 
     my $standby_locstr;
     my $extra_locstr;
@@ -414,7 +414,7 @@ while(1) {
     erase();
     attron(A_BOLD);
     printw(sprintf "M= %s:%s %8s keep %d\n", $master_location{PGHOST}, $master_location{PGPORT},
-           $master_location{XLOGLOCATION}, $master_location{WAL_KEEP_SEGMENTS});
+           $master_location{WALLOCATION}, $master_location{WAL_KEEP_SEGMENTS});
     attroff(A_BOLD);
     addstr("");
 
@@ -437,36 +437,44 @@ while(1) {
             next;
         }
 
-        ## Calculate the distance of XLOGs replayed between master and standby
-        %distance = XLOGDistance(\%master_location, $location->{XLOGLOCATION});
+        ## Calculate the distance of WALs replayed between master and standby
+        %distance = WALDistance(\%master_location, $location->{WALLOCATION});
 
-        ## Calculate the distance of XLOGs received from master
-        %distance_recv = XLOGDistance(\%master_location, $location->{XLOGRECVLOCATION});
+        ## Calculate the distance of WALs received from master
+        %distance_recv = WALDistance(\%master_location, $location->{WALRECVLOCATION});
 
         ## Materialize output
         $standby_locstr = sprintf "   %s:%s %s replay(segid=%d/count=%d) recv(segid=%d/count=%d)\n",
                                   $location->{PGHOST}, $location->{PGPORT},
-                                  $location->{XLOGLOCATION}, $distance{XLOGSEGID},
-                                  $distance{XLOGCOUNT}, $distance_recv{XLOGSEGID},
-                                  $distance_recv{XLOGCOUNT};
-        $extra_locstr = sprintf "   -M>>S=(%X/%d %X/%d) lag %u MB, time %s\n", $distance{MASTER_XLOGSEGID},
-                                $distance{MASTER_XLOGCOUNT}, $distance{SLAVE_XLOGSEGID},
-                                $distance{SLAVE_XLOGCOUNT},
-                                $distance{SLAVE_XLOG_BACKLOG_SZ} / 1024 / 1024,
-                                $location->{XLOGTIMELAG};
+                                  $location->{WALLOCATION}, $distance{WALSEGID},
+                                  $distance{WALCOUNT}, $distance_recv{WALSEGID},
+                                  $distance_recv{WALCOUNT};
+        $extra_locstr = sprintf "   -M>>S=(%X/%d %X/%d) lag %u MB, time %s\n", $distance{MASTER_WALSEGID},
+                                $distance{MASTER_WALCOUNT}, $distance{SLAVE_WALSEGID},
+                                $distance{SLAVE_WALCOUNT},
+                                $distance{SLAVE_WAL_BACKLOG_SZ} / 1024 / 1024,
+                                $location->{WALTIMELAG};
 
         ## check wether the current receive lag will likely exceed the available
-        ## XLOG segments located on the primary. Give a warning when
-        ## we exceed wal_keep_segments.
+        ## WAL segments located on the primary. Give a warning when
+        ## we exceed wal_keep_segments. If wal_keep_segments isn't used
+        ## (set to 0), then there isn't much sense in this check, so go
+        ## just forward in this case.
         ##
         ## NOTE: this will return to 'STREAMING possible' as soon as the standby
-        ## doesn't lag more than XLOGCOUNT > WAL_KEEP_SEGMENTS.
+        ## doesn't lag more than WALCOUNT > WAL_KEEP_SEGMENTS.
         ## However, this doesn't mean that the standby *will* immediately return
-        ## into XLOG streaming. The PostgreSQL startup process will seek the XLOG
+        ## into WAL streaming. The PostgreSQL startup process will seek the WAL
         ## segments from archive until it has absorbed all available segments and can
         ## safely return to streaming mode.
 
-        if ($master_location{WAL_KEEP_SEGMENTS} > $distance_recv{XLOGCOUNT}) {
+        if ($master_location{WAL_KEEP_SEGMENTS} == 0) {
+            printw(sprintf "S= %s ", $standby_locstr);
+            attron(COLOR_PAIR(1));
+            printw("  STREAMING\n");
+            attroff(COLOR_PAIR(1));
+            next;
+        } elsif ($master_location{WAL_KEEP_SEGMENTS} > $distance_recv{WALCOUNT}) {
             printw(sprintf "S= %s ", $standby_locstr);
             attron(COLOR_PAIR(1));
             printw("  STREAMING possible\n");
